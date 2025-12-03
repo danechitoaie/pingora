@@ -32,6 +32,8 @@ use std::sync::Arc;
 use std::thread;
 #[cfg(unix)]
 use tokio::signal::unix;
+#[cfg(windows)]
+use tokio::signal;
 use tokio::sync::{broadcast, watch, Mutex};
 use tokio::time::{sleep, Duration};
 
@@ -298,6 +300,33 @@ impl Server {
             }
         }
     }
+
+    #[cfg(windows)]
+    async fn main_loop(&self) -> ShutdownType {
+        self.execution_phase_watch
+            .send(ExecutionPhase::Running)
+            .ok();
+
+        let mut graceful_terminate_signal = signal::windows::ctrl_c().unwrap();
+        tokio::select! {
+            _ = graceful_terminate_signal.recv() => {
+                // we receive a graceful terminate, all instances are instructed to stop
+                info!("CTRL-C received, gracefully exiting");
+                // graceful shutdown if there are listening sockets
+                info!("Broadcasting graceful shutdown");
+                match self.shutdown_watch.send(true) {
+                    Ok(_) => { 
+                        info!("Graceful shutdown started!"); 
+                    }
+                    Err(e) => {
+                        error!("Graceful shutdown broadcast failed: {e}");
+                    }
+                }
+                info!("Broadcast graceful shutdown complete");
+                ShutdownType::Graceful
+            }
+        }
+    }    
 
     fn run_service(
         mut service: Box<dyn Service>,
